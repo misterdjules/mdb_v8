@@ -5099,13 +5099,17 @@ findjsobjects_referent(findjsobjects_state_t *fjs, uintptr_t addr)
 }
 
 static void
-findjsobjects_referents_destroy(avl_tree_t *referents)
+findjsobjects_referents_destroy(findjsobjects_state_t *fjs)
 {
+	avl_tree_t *referents = &fjs->fjs_referents;
 	findjsobjects_referent_t *referent;
 	void *cookie = NULL;
 
 	while ((referent = avl_destroy_nodes(referents, &cookie)) != NULL)
 		mdb_free(referent, sizeof (findjsobjects_referent_t));
+
+	fjs->fjs_head = NULL;
+	fjs->fjs_tail = NULL;
 }
 
 static void
@@ -5174,9 +5178,6 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 	 * Finally, destroy our referent nodes.
 	 */
 	findjsobjects_referents_destroy(referents);
-
-	fjs->fjs_head = NULL;
-	fjs->fjs_tail = NULL;
 }
 
 static findjsobjects_instance_t *
