@@ -5099,7 +5099,7 @@ findjsobjects_referent(findjsobjects_state_t *fjs, uintptr_t addr)
 }
 
 static void
-findjsobjects_referents_destroy(const avl_tree_t *referents)
+findjsobjects_referents_destroy(avl_tree_t *referents)
 {
 	findjsobjects_referent_t *referent;
 	void *cookie = NULL;
@@ -5115,7 +5115,6 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 	findjsobjects_referent_t *referent;
 	avl_tree_t *referents = &fjs->fjs_referents;
 	findjsobjects_obj_t *obj;
-	void *cookie = NULL;
 	uintptr_t addr;
 
 	fjs->fjs_referred = B_FALSE;
