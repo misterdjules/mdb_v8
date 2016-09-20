@@ -5177,7 +5177,7 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 	/*
 	 * Finally, destroy our referent nodes.
 	 */
-	findjsobjects_referents_destroy(referents);
+	findjsobjects_referents_destroy(fjs);
 }
 
 static findjsobjects_instance_t *
@@ -5573,7 +5573,7 @@ dcmd_findjsobjects(uintptr_t addr,
 		 * Destroy all referents added by previous commands before
 		 * adding new referents for this findjsobjects invocation.
 		 */
-		findjsobjects_referents_destroy(&fjs->fjs_referents);
+		findjsobjects_referents_destroy(fjs);
 
 		if (!listlike) {
 			findjsobjects_referent(fjs, inst->fjsi_addr);
