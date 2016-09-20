@@ -5117,7 +5117,6 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 {
 	findjsobjects_reference_t *reference;
 	findjsobjects_referent_t *referent;
-	avl_tree_t *referents = &fjs->fjs_referents;
 	findjsobjects_obj_t *obj;
 	uintptr_t addr;
 
