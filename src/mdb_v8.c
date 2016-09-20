@@ -5099,6 +5099,16 @@ findjsobjects_referent(findjsobjects_state_t *fjs, uintptr_t addr)
 }
 
 static void
+findjsobjects_referents_destroy(const avl_tree_t *referents)
+{
+	findjsobjects_referent_t *referent;
+	void *cookie = NULL;
+
+	while ((referent = avl_destroy_nodes(referents, &cookie)) != NULL)
+		mdb_free(referent, sizeof (findjsobjects_referent_t));
+}
+
+static void
 findjsobjects_references(findjsobjects_state_t *fjs)
 {
 	findjsobjects_reference_t *reference;
@@ -5164,8 +5174,7 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 	/*
 	 * Finally, destroy our referent nodes.
 	 */
-	while ((referent = avl_destroy_nodes(referents, &cookie)) != NULL)
-		mdb_free(referent, sizeof (findjsobjects_referent_t));
+	findjsobjects_referents_destroy(referents);
 
 	fjs->fjs_head = NULL;
 	fjs->fjs_tail = NULL;
@@ -5559,6 +5568,12 @@ dcmd_findjsobjects(uintptr_t addr,
 
 			return (DCMD_OK);
 		}
+
+		/*
+		 * Destroy all referents added by previous commands before
+		 * adding new referents for this findjsobjects invocation.
+		 */
+		findjsobjects_referents_destroy(&fjs->fjs_referents);
 
 		if (!listlike) {
 			findjsobjects_referent(fjs, inst->fjsi_addr);
