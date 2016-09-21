@@ -4599,6 +4599,8 @@ typedef struct findjsobjects_state {
 	findjsobjects_stats_t fjs_stats;
 } findjsobjects_state_t;
 
+static findjsobjects_state_t findjsobjects_state;
+
 findjsobjects_obj_t *
 findjsobjects_alloc(uintptr_t addr)
 {
@@ -4991,7 +4993,11 @@ findjsobjects_references_add(findjsobjects_state_t *fjs, v8propvalue_t *valp,
     const char *desc, size_t index)
 {
 	assert(valp != NULL);
-
+	/*
+	fprintf(stderr, "findjsobjects_references_add: fjs = %p, valp = %p\n",
+	    fjs, valp);
+	fflush(stderr);
+	*/
 	findjsobjects_referent_t search, *referent;
 	findjsobjects_reference_t *reference;
 
@@ -5003,10 +5009,17 @@ findjsobjects_references_add(findjsobjects_state_t *fjs, v8propvalue_t *valp,
 	}
 
 	search.fjsr_addr = valp->v8v_u.v8vu_addr;
-
+	/*
+	fprintf(stderr, "searching if address is one of the referents\n");
+	fflush(stderr);
+	*/
 	if ((referent = avl_find(&fjs->fjs_referents, &search, NULL)) == NULL)
 		return;
-
+	/*
+	fprintf(stderr,
+	    "address was one of the referents, adding it to references\n");
+	fflush(stderr);
+	*/
 	reference = mdb_zalloc(sizeof (*reference), UM_SLEEP | UM_GC);
 	reference->fjsrf_addr = fjs->fjs_addr;
 
@@ -5097,6 +5110,99 @@ findjsobjects_referent(findjsobjects_state_t *fjs, uintptr_t addr)
 	if (fjs->fjs_marking)
 		mdb_printf("findjsobjects: marked %p\n", addr);
 }
+static int
+jsfunc_closure_variables(uintptr_t function_addr,
+	int (*func)(v8scopeinfo_t *sip, v8scopeinfo_var_t *sivp, void *arg),
+	void *arg)
+{
+	v8function_t *funcp;
+	v8context_t *ctxp;
+	v8scopeinfo_t *sip;
+	int memflags = UM_SLEEP | UM_GC;
+
+	if ((funcp = v8function_load(function_addr, memflags)) == NULL) {
+		mdb_warn("%p: failed to load JSFunction\n", function_addr);
+		return (-1);
+	}
+
+	if ((ctxp = v8function_context(funcp, memflags)) == NULL) {
+		mdb_warn("%p: failed to load Context for JSFunction\n",
+		    function_addr);
+		return (-1);
+	}
+
+	if ((sip = v8context_scopeinfo(ctxp, memflags)) == NULL) {
+		mdb_warn("%p: failed to load ScopeInfo\n", function_addr);
+		return (-1);
+	}
+
+	if (v8scopeinfo_iter_vars(sip, V8SV_CONTEXTLOCALS,
+	    func, ctxp) != 0) {
+		mdb_warn("%p: failed to iterate closure variables\n",
+		    function_addr);
+		return (-1);
+	}
+
+	return (0);
+}
+
+static int
+findjsobjects_references_closure_variable(v8scopeinfo_t *sip,
+	v8scopeinfo_var_t *sivp, void *arg)
+{
+	findjsobjects_state_t *fjs = &findjsobjects_state;
+	v8context_t *ctxp = arg;
+	size_t validx;
+	uintptr_t var_namep, var_valp;
+	v8propvalue_t value;
+	int64_t bufsz = -1;
+	v8string_t *strp;
+	mdbv8_strbuf_t *strb;
+	const char *varname_cstr;
+
+	/* Get the variable value in the form of a property value */
+	validx = v8scopeinfo_var_idx(sip, sivp);
+	if (v8context_var_value(ctxp, validx, &var_valp) != 0) {
+		return (-1);
+	}
+
+	/* fprintf(stderr, "var_valp: %" PRIXPTR "\n", var_valp); */
+
+	jsobj_propvalue_addr(&value, var_valp);
+
+	/* Get the variable name */
+	var_namep = v8scopeinfo_var_name(sip, sivp);
+	if ((strp = v8string_load(var_namep, UM_GC)) == NULL) {
+		return (-1);
+	}
+
+	if (bufsz == -1) {
+		/*
+		 * The buffer size should accommodate the length of the string,
+		 * plus the surrounding quotes, plus the terminator.  (If we're
+		 * wrong here, the visible string will just be truncated.)
+		 */
+		bufsz = v8string_length(strp) + sizeof ("\"\"");
+	}
+
+	if ((strb = mdbv8_strbuf_alloc(bufsz, UM_GC)) == NULL) {
+		return (-1);
+	}
+
+	if (v8string_write(strp, strb, MSF_ASCIIONLY, JSSTR_NONE) != 0) {
+		return (-1);
+	}
+
+	varname_cstr = mdbv8_strbuf_tocstr(strb);
+	/*
+	fprintf(stderr, "variable name: %s\n", varname_cstr);
+	fflush(stderr);
+	*/
+	findjsobjects_references_add(fjs, &value, varname_cstr,
+	    -1);
+
+	return (0);
+}
 
 static void
 findjsobjects_references(findjsobjects_state_t *fjs)
@@ -5105,6 +5211,7 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 	findjsobjects_referent_t *referent;
 	avl_tree_t *referents = &fjs->fjs_referents;
 	findjsobjects_obj_t *obj;
+	findjsobjects_func_t *func;
 	void *cookie = NULL;
 	uintptr_t addr;
 
@@ -5129,6 +5236,24 @@ findjsobjects_references(findjsobjects_state_t *fjs)
 
 			(void) jsobj_properties(inst->fjsi_addr,
 			    findjsobjects_references_prop, fjs, NULL);
+		}
+	}
+
+	/*
+	 * Then traverse over all functions, looking for references
+	 * to our designated referent(s) from their closures.
+	 */
+	for (func = fjs->fjs_funcs; func != NULL; func = func->fjsf_next) {
+		findjsobjects_instance_t *head = &func->fjsf_instances;
+		findjsobjects_instance_t *func_inst;
+
+		for (func_inst = head; func_inst != NULL;
+		    func_inst = func_inst->fjsi_next) {
+			fjs->fjs_addr = func_inst->fjsi_addr;
+
+			(void) jsfunc_closure_variables(func_inst->fjsi_addr,
+			    findjsobjects_references_closure_variable,
+			    fjs);
 		}
 	}
 
@@ -5348,8 +5473,6 @@ dcmd_findjsobjects_help(void)
 "  -r       Find references to the specified and/or marked object(s)\n"
 "  -v       Provide verbose statistics\n");
 }
-
-static findjsobjects_state_t findjsobjects_state;
 
 static int
 findjsobjects_run(findjsobjects_state_t *fjs)
@@ -5731,29 +5854,9 @@ jsclosure_iter_var(v8scopeinfo_t *sip, v8scopeinfo_var_t *sivp, void *arg)
 static int
 dcmd_jsclosure(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	v8function_t *funcp;
-	v8context_t *ctxp;
-	v8scopeinfo_t *sip;
-	int memflags = UM_SLEEP | UM_GC;
+	findjsobjects_state_t *fjs = &findjsobjects_state;
 
-	if ((funcp = v8function_load(addr, memflags)) == NULL) {
-		mdb_warn("%p: failed to load JSFunction\n", addr);
-		return (DCMD_ERR);
-	}
-
-	if ((ctxp = v8function_context(funcp, memflags)) == NULL) {
-		mdb_warn("%p: failed to load Context for JSFunction\n", addr);
-		return (DCMD_ERR);
-	}
-
-	if ((sip = v8context_scopeinfo(ctxp, memflags)) == NULL) {
-		mdb_warn("%p: failed to load ScopeInfo\n", addr);
-		return (DCMD_ERR);
-	}
-
-	if (v8scopeinfo_iter_vars(sip, V8SV_CONTEXTLOCALS,
-	    jsclosure_iter_var, ctxp) != 0) {
-		mdb_warn("%p: failed to iterate closure variables\n", addr);
+	if (jsfunc_closure_variables(addr, jsclosure_iter_var, fjs) != 0) {
 		return (DCMD_ERR);
 	}
 
