@@ -5568,11 +5568,14 @@ dcmd_findjsobjects(uintptr_t addr,
 			return (DCMD_OK);
 		}
 
-		/*
-		 * Destroy all referents added by previous commands before
-		 * adding new referents for this findjsobjects invocation.
-		 */
-		findjsobjects_referents_destroy(fjs);
+		if (!fjs->fjs_marking) {
+			/*
+			 * Destroy all referents added by previous marking
+			 * commands before adding new referents for this
+			 * non-marking command invocation.
+			 */
+			findjsobjects_referents_destroy(fjs);
+		}
 
 		if (!listlike) {
 			findjsobjects_referent(fjs, inst->fjsi_addr);
