@@ -14,6 +14,11 @@ var os = require('os');
 var path = require('path');
 var util = require('util');
 
+var getRuntimeVersions = require('../lib/runtime-versions').getRuntimeVersions;
+
+var RUNTIME_VERSIONS = getRuntimeVersions();
+var V8_VERSION = RUNTIME_VERSIONS.V8;
+
 /*
  * Some functions to create a recognizable stack.
  */
@@ -85,7 +90,23 @@ dtrace.on('exit', function (code) {
 			process.exit(code2);
 		}
 
-		var sentinel = '<anonymous> (as ';
+		var sentinel = 'js:     ';
+		/*
+		 * Starting with V8 5.1.x.y, function definitions of the
+		 * following form:
+		 *
+		 * var foo = function () {}
+		 *
+		 * don't have an inferred name, but instead an actual name. As
+		 * a result,
+		 * their representation doesn't include the "<anonymous> as "
+		 * prefix.
+		 */
+		if (V8_VERSION.major < 5 ||
+		    (V8_VERSION.major === 5 && V8_VERSION.minor < 1)) {
+			sentinel += '<anonymous> (as ';
+		}
+
 		var arg1 = '          arg1: ';
 		var lines = output.split('\n');
 		var matched = 0;
