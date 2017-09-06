@@ -79,9 +79,9 @@ typedef struct {
 static v8_class_t	*v8_classes;
 
 static v8_enum_t	v8_types[128];
-static int 		v8_next_type;
+static size_t 		v8_next_type;
 
-static v8_enum_t 	v8_frametypes[16];
+static v8_enum_t 	v8_frametypes[32];
 static int 		v8_next_frametype;
 
 static int		v8_warnings;
@@ -204,6 +204,7 @@ ssize_t V8_OFF_JSFUNCTION_SHARED;
 ssize_t V8_OFF_JSOBJECT_ELEMENTS;
 ssize_t V8_OFF_JSOBJECT_PROPERTIES;
 ssize_t V8_OFF_JSRECEIVER_PROPERTIES;
+ssize_t V8_OFF_JSRECEIVER_RAW_PROPERTIES_OR_HASH;
 ssize_t V8_OFF_MAP_CONSTRUCTOR;
 ssize_t V8_OFF_MAP_CONSTRUCTOR_OR_BACKPOINTER;
 ssize_t V8_OFF_MAP_INOBJECT_PROPERTIES;
@@ -233,6 +234,7 @@ ssize_t V8_OFF_SHAREDFUNCTIONINFO_IDENTIFIER;
 ssize_t V8_OFF_SHAREDFUNCTIONINFO_LENGTH;
 ssize_t V8_OFF_SHAREDFUNCTIONINFO_SCRIPT;
 ssize_t V8_OFF_SHAREDFUNCTIONINFO_NAME;
+ssize_t V8_OFF_SHAREDFUNCTIONINFO_RAW_NAME;
 ssize_t V8_OFF_SLICEDSTRING_PARENT;
 ssize_t V8_OFF_SLICEDSTRING_OFFSET;
 ssize_t V8_OFF_STRING_LENGTH;
@@ -340,8 +342,10 @@ static v8_constant_t v8_constants[] = {
 	{ &V8_ISSHARED_SHIFT,		"v8dbg_isshared_shift",
 	    V8_CONSTANT_FALLBACK(3, 11), 0 },
 	{ &V8_PROP_IDX_FIRST,		"v8dbg_prop_idx_first"		},
-	{ &V8_PROP_TYPE_FIELD,		"v8dbg_prop_type_field"		},
-	{ &V8_PROP_TYPE_MASK,		"v8dbg_prop_type_mask"		},
+	{ &V8_PROP_TYPE_FIELD,		"v8dbg_prop_type_field",
+		V8_CONSTANT_REMOVED_SINCE(5, 7) },
+	{ &V8_PROP_TYPE_MASK,		"v8dbg_prop_type_mask",
+		V8_CONSTANT_REMOVED_SINCE(5, 7) },
 	{ &V8_PROP_IDX_CONTENT,		"v8dbg_prop_idx_content",
 	    V8_CONSTANT_OPTIONAL },
 	{ &V8_PROP_DESC_KEY,		"v8dbg_prop_desc_key",
@@ -460,11 +464,11 @@ static v8_offset_t v8_offsets[] = {
 	 * moved the properties from JSObject to JSReceiver.
 	 */
 	{ &V8_OFF_JSOBJECT_PROPERTIES,
-	    "JSObject", "properties", B_FALSE,
-		V8_CONSTANT_REMOVED_SINCE(4, 9) },
+	    "JSObject", "properties", B_TRUE },
 	{ &V8_OFF_JSRECEIVER_PROPERTIES,
-	    "JSReceiver", "properties", B_FALSE,
-		V8_CONSTANT_ADDED_SINCE(4, 9) },
+		"JSReceiver", "properties", B_TRUE },
+	{ &V8_OFF_JSRECEIVER_RAW_PROPERTIES_OR_HASH,
+		"JSReceiver", "raw_properties_or_hash", B_TRUE },
 	{ &V8_OFF_JSREGEXP_DATA,
 	    "JSRegExp", "data", B_TRUE },
 	{ &V8_OFF_MAP_CONSTRUCTOR,
@@ -536,7 +540,9 @@ static v8_offset_t v8_offsets[] = {
 	{ &V8_OFF_SHAREDFUNCTIONINFO_LENGTH,
 	    "SharedFunctionInfo", "length" },
 	{ &V8_OFF_SHAREDFUNCTIONINFO_NAME,
-	    "SharedFunctionInfo", "name" },
+		"SharedFunctionInfo", "name", V8_CONSTANT_REMOVED_SINCE(6, 1) },
+	{ &V8_OFF_SHAREDFUNCTIONINFO_NAME,
+		"SharedFunctionInfo", "raw_name", V8_CONSTANT_ADDED_SINCE(6, 1) },
 	{ &V8_OFF_SHAREDFUNCTIONINFO_SCOPE_INFO,
 	    "SharedFunctionInfo", "scope_info", B_TRUE },
 	{ &V8_OFF_SHAREDFUNCTIONINFO_SCRIPT,
@@ -1072,6 +1078,15 @@ again:
 		V8_OFF_JSOBJECT_PROPERTIES = V8_OFF_JSRECEIVER_PROPERTIES;
 	}
 
+	if (V8_OFF_JSOBJECT_PROPERTIES == -1) {
+		V8_OFF_JSOBJECT_PROPERTIES = V8_OFF_JSRECEIVER_RAW_PROPERTIES_OR_HASH;
+	}
+
+	if (V8_OFF_JSOBJECT_PROPERTIES == -1) {
+		mdb_warn("Could not find offset of JS object properties\n");
+		failed++;
+	}
+
 	/*
 	 * Starting with V8 5.1.71 (and node v6.5.0), the value that identifies
 	 * the type of an internal frame is stored at offset
@@ -1348,7 +1363,7 @@ conf_update_type(v8_cfg_t *cfgp, const char *symbol)
 	v8_enum_t *enp;
 	char buf[128];
 
-	if (v8_next_type > sizeof (v8_types) / sizeof (v8_types[0])) {
+	if (v8_next_type >= sizeof (v8_types) / sizeof (v8_types[0])) {
 		mdb_warn("too many V8 types\n");
 		return (-1);
 	}
@@ -1373,7 +1388,7 @@ conf_update_frametype(v8_cfg_t *cfgp, const char *symbol)
 	const char *frametype;
 	v8_enum_t *enp;
 
-	if (v8_next_frametype >
+	if (v8_next_frametype >=
 	    sizeof (v8_frametypes) / sizeof (v8_frametypes[0])) {
 		mdb_warn("too many V8 frame types\n");
 		return (-1);
